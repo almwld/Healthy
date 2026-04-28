@@ -1,0 +1,146 @@
+name: Sehtak Platform Full Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # ================== BUILD FLUTTER APP ==================
+  build-flutter:
+    name: 📱 Build Flutter Mobile App
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.16.0'
+          channel: 'stable'
+          
+      - name: Get dependencies
+        run: |
+          cd mobile_app
+          flutter pub get
+          
+      - name: Analyze code
+        run: |
+          cd mobile_app
+          flutter analyze --no-fatal-infos
+          
+      - name: Run tests
+        run: |
+          cd mobile_app
+          flutter test
+          
+      - name: Build APK
+        run: |
+          cd mobile_app
+          flutter build apk --release --split-per-abi
+          
+      - name: Build AppBundle
+        run: |
+          cd mobile_app
+          flutter build appbundle --release
+          
+      - name: Upload Flutter artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sehtak-flutter-apps
+          path: |
+            mobile_app/build/app/outputs/flutter-apk/*.apk
+            mobile_app/build/app/outputs/bundle/release/app-release.aab
+
+  # ================== BUILD BACKEND DOCKER ==================
+  build-backend:
+    name: 🐳 Build Backend Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Build and push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/sehtak-backend:latest
+            ${{ secrets.DOCKER_USERNAME }}/sehtak-backend:${{ github.sha }}
+
+  # ================== BUILD AI SERVICE DOCKER ==================
+  build-ai:
+    name: 🤖 Build AI Service Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Build and push AI Service
+        uses: docker/build-push-action@v5
+        with:
+          context: ./ai_service
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/sehtak-ai:latest
+            ${{ secrets.DOCKER_USERNAME }}/sehtak-ai:${{ github.sha }}
+
+  # ================== CREATE RELEASE ==================
+  create-release:
+    name: 📦 Create GitHub Release
+    needs: [build-flutter, build-backend, build-ai]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download Flutter artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sehtak-flutter-apps
+          path: ./artifacts/flutter
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Sehtak Platform v${{ github.run_number }}
+          body: |
+            ✅ **Sehtak Platform - التكامل الكامل**
+            
+            ### 📱 Flutter App (APK + AAB)
+            - تم بناء التطبيق بنجاح
+            - متوافق مع Android 5.0+
+            
+            ### 🐳 Docker Images
+            - Backend: `${{ secrets.DOCKER_USERNAME }}/sehtak-backend:latest`
+            - AI Service: `${{ secrets.DOCKER_USERNAME }}/sehtak-ai:latest`
+            
+            ### 🚀 للتشغيل
+            ```bash
+            docker-compose -f deployment/docker-compose.yml up -d
+            ```
+          files: |
+            ./artifacts/flutter/*.apk
+            ./artifacts/flutter/*.aab
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
